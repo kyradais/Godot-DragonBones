@@ -35,6 +35,7 @@
 #include <godot_cpp/classes/ref.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/variant/array.hpp>
+#include <godot_cpp/variant/packed_vector2_array.hpp>
 
 #include "armature.h"
 #include "dragon_bones.h"
@@ -492,6 +493,52 @@ Color DragonBonesArmatureView::get_debug_draw_color_ik_bone_outline() const {
 #endif
 }
 
+void DragonBonesArmatureView::set_occluder_enabled(bool p_enabled) {
+	if (occluder_enabled == p_enabled) {
+		return;
+	}
+	occluder_enabled = p_enabled;
+	const auto RS = RenderingServer::get_singleton();
+	if (RS && occluder_rid.is_valid()) {
+		RS->canvas_light_occluder_set_enabled(occluder_rid, occluder_enabled);
+	}
+	queue_redraw();
+}
+
+bool DragonBonesArmatureView::is_occluder_enabled() const {
+	return occluder_enabled;
+}
+
+void DragonBonesArmatureView::set_occluder_cull_mode(OccluderCullMode p_cull_mode) {
+	if (occluder_cull_mode == p_cull_mode) {
+		return;
+	}
+	occluder_cull_mode = p_cull_mode;
+	const auto RS = RenderingServer::get_singleton();
+	if (RS && occluder_rid.is_valid()) {
+		RS->canvas_light_occluder_set_cull_mode(occluder_rid, (RenderingServer::CanvasLightOccluderCullMode)occluder_cull_mode);
+	}
+}
+
+DragonBonesArmatureView::OccluderCullMode DragonBonesArmatureView::get_occluder_cull_mode() const {
+	return occluder_cull_mode;
+}
+
+void DragonBonesArmatureView::set_occluder_light_mask(int p_light_mask) {
+	if (occluder_light_mask == p_light_mask) {
+		return;
+	}
+	occluder_light_mask = p_light_mask;
+	const auto RS = RenderingServer::get_singleton();
+	if (RS && occluder_rid.is_valid()) {
+		RS->canvas_light_occluder_set_light_mask(occluder_rid, occluder_light_mask);
+	}
+}
+
+int DragonBonesArmatureView::get_occluder_light_mask() const {
+	return occluder_light_mask;
+}
+
 void DragonBonesArmatureView::set_time_scale(float p_time_scale) {
 	time_scale = p_time_scale < 0.0 ? 0.0 : p_time_scale;
 }
@@ -659,6 +706,31 @@ void DragonBonesArmatureView::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
 			set_active(active);
+			const auto RS = RenderingServer::get_singleton();
+			if (RS && !occluder_rid.is_valid()) {
+				occluder_polygon_rid = RS->canvas_light_occluder_polygon_create();
+				occluder_rid = RS->canvas_light_occluder_create();
+				RS->canvas_light_occluder_set_polygon(occluder_rid, occluder_polygon_rid);
+				RS->canvas_light_occluder_set_enabled(occluder_rid, occluder_enabled);
+				RS->canvas_light_occluder_set_cull_mode(occluder_rid, (RenderingServer::CanvasLightOccluderCullMode)occluder_cull_mode);
+				RS->canvas_light_occluder_set_light_mask(occluder_rid, occluder_light_mask);
+				if (is_inside_tree()) {
+					RS->canvas_light_occluder_attach_to_canvas(occluder_rid, get_canvas_item());
+				}
+			}
+		} break;
+		case NOTIFICATION_EXIT_TREE: {
+			const auto RS = RenderingServer::get_singleton();
+			if (RS && occluder_rid.is_valid()) {
+				if (RS->canvas_light_occluder_get_canvas(occluder_rid) == get_canvas_item()) {
+					RS->canvas_light_occluder_detach_from_canvas(occluder_rid);
+				}
+				RS->free_rid(occluder_polygon_rid);
+				RS->free_rid(occluder_rid);
+				occluder_rid = RID();
+				occluder_polygon_rid = RID();
+				occluder_polygon.clear();
+			}
 		} break;
 		case NOTIFICATION_INTERNAL_PROCESS: {
 			if (active && callback_mode_process == ANIMATION_CALLBACK_MODE_PROCESS_IDLE) {
@@ -692,6 +764,20 @@ void DragonBonesArmatureView::_draw() {
 	}
 
 	const auto RS = RenderingServer::get_singleton();
+
+	// Update occluder polygon from draw data if enabled.
+	if (occluder_enabled && occluder_rid.is_valid()) {
+		occluder_polygon.clear();
+		for (const ArmatureDrawData::Layer &layer : draw_data) {
+			for (const ArmatureDrawData::Data &data : layer.get_data()) {
+				const auto v = data.vertices->ptr();
+				for (size_t i = 0; i < data.vertices->size(); ++i) {
+					occluder_polygon.push_back(data.transform.xform(v[i]));
+				}
+			}
+		}
+		RS->canvas_light_occluder_polygon_set(occluder_polygon_rid, occluder_polygon);
+	}
 
 	draw_scratch.rebuild();
 
@@ -882,13 +968,22 @@ void DragonBonesArmatureView::_bind_methods() {
 	BIND_ENUM_CONSTANT(ANIMATION_CALLBACK_MODE_PROCESS_IDLE);
 	BIND_ENUM_CONSTANT(ANIMATION_CALLBACK_MODE_PROCESS_MANUAL);
 
-	// Enum
-	// BIND_ENUM_CONSTANT(AnimFadeOutMode::FADE_OUT_NONE);
-	// BIND_ENUM_CONSTANT(AnimFadeOutMode::FADE_OUT_SAME_LAYER);
-	// BIND_ENUM_CONSTANT(AnimFadeOutMode::FADE_OUT_SAME_GROUP);
-	// BIND_ENUM_CONSTANT(AnimFadeOutMode::FADE_OUT_SAME_LAYER_AND_GROUP);
-	// BIND_ENUM_CONSTANT(AnimFadeOutMode::FADE_OUT_ALL);
-	// BIND_ENUM_CONSTANT(AnimFadeOutMode::FADE_OUT_SINGLE);
+	BIND_ENUM_CONSTANT(OCCLUDER_CULL_DISABLED);
+	BIND_ENUM_CONSTANT(OCCLUDER_CULL_CLOCKWISE);
+	BIND_ENUM_CONSTANT(OCCLUDER_CULL_COUNTERCLOCKWISE);
+
+	// Light occlusion
+	ClassDB::bind_method(D_METHOD("set_occluder_enabled", "enabled"), &DragonBonesArmatureView::set_occluder_enabled);
+	ClassDB::bind_method(D_METHOD("is_occluder_enabled"), &DragonBonesArmatureView::is_occluder_enabled);
+	ClassDB::bind_method(D_METHOD("set_occluder_cull_mode", "cull_mode"), &DragonBonesArmatureView::set_occluder_cull_mode);
+	ClassDB::bind_method(D_METHOD("get_occluder_cull_mode"), &DragonBonesArmatureView::get_occluder_cull_mode);
+	ClassDB::bind_method(D_METHOD("set_occluder_light_mask", "light_mask"), &DragonBonesArmatureView::set_occluder_light_mask);
+	ClassDB::bind_method(D_METHOD("get_occluder_light_mask"), &DragonBonesArmatureView::get_occluder_light_mask);
+
+	ADD_GROUP("Light Occluder", "occluder_");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "occluder_enabled"), "set_occluder_enabled", "is_occluder_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_cull_mode", PROPERTY_HINT_ENUM, "Disabled,Clockwise,CounterClockwise"), "set_occluder_cull_mode", "get_occluder_cull_mode");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_light_mask", PROPERTY_HINT_RANGE, "0,1023,1"), "set_occluder_light_mask", "get_occluder_light_mask");
 
 	//
 	DragonBones::add_clean_static_callback(&clear_static);
@@ -907,10 +1002,22 @@ DragonBonesArmatureView::~DragonBonesArmatureView() {
 
 	DragonBones::get_singleton()->flush();
 
-	for (auto mesh : draw_meshes) {
-		RenderingServer::get_singleton()->free_rid(mesh);
+	const auto RS = RenderingServer::get_singleton();
+	if (RS) {
+		if (occluder_rid.is_valid()) {
+			if (RS->canvas_light_occluder_get_canvas(occluder_rid) != RID()) {
+				RS->canvas_light_occluder_detach_from_canvas(occluder_rid);
+			}
+			RS->free_rid(occluder_polygon_rid);
+			RS->free_rid(occluder_rid);
+		}
+		for (auto mesh : draw_meshes) {
+			RS->free_rid(mesh);
+		}
+		draw_meshes.clear();
+		occluder_rid = RID();
+		occluder_polygon_rid = RID();
 	}
-	draw_meshes.clear();
 }
 
 // ---------

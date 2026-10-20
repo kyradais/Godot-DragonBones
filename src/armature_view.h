@@ -35,6 +35,7 @@
 #include <dragonBones/core/DragonBones.h>
 #include <godot_cpp/classes/node2d.hpp>
 #include <godot_cpp/templates/hash_map.hpp>
+#include <godot_cpp/variant/packed_vector2_array.hpp>
 
 #ifdef DEBUG_ENABLED
 #include "debug_draw.h"
@@ -54,6 +55,13 @@ public:
 		ANIMATION_CALLBACK_MODE_PROCESS_MANUAL = 2,
 	};
 
+	/** Cull mode for the light occluder polygon. */
+	enum OccluderCullMode {
+		OCCLUDER_CULL_DISABLED = 0,
+		OCCLUDER_CULL_CLOCKWISE = 1,
+		OCCLUDER_CULL_COUNTERCLOCKWISE = 2,
+	};
+
 	using AnimFadeOutMode = DragonBonesArmature::AnimFadeOutMode;
 
 private:
@@ -69,6 +77,14 @@ private:
 	bool active{ true };
 
 	LocalVector<RID> draw_meshes;
+
+	// Light occlusion
+	bool occluder_enabled{ false };
+	OccluderCullMode occluder_cull_mode{ OCCLUDER_CULL_DISABLED };
+	int occluder_light_mask{ 0b001 }; // 1st light layer
+	RID occluder_rid;
+	RID occluder_polygon_rid;
+	PackedVector2Array occluder_polygon;
 
 #ifdef DEBUG_ENABLED
 	DebugDraw debug_draw{ this };
@@ -139,6 +155,16 @@ public:
 	Color get_debug_draw_color_ik_target() const;
 	void set_debug_draw_color_ik_bone_outline(const Color &p_color);
 	Color get_debug_draw_color_ik_bone_outline() const;
+
+	// Light occlusion setters and getters
+	void set_occluder_enabled(bool p_enabled);
+	bool is_occluder_enabled() const;
+
+	void set_occluder_cull_mode(OccluderCullMode p_cull_mode);
+	OccluderCullMode get_occluder_cull_mode() const;
+
+	void set_occluder_light_mask(int p_light_mask);
+	int get_occluder_light_mask() const;
 
 	DragonBonesArmature *get_armature();
 
@@ -219,3 +245,4 @@ private:
 } //namespace godot
 
 VARIANT_ENUM_CAST(godot::DragonBonesArmatureView::AnimationCallbackModeProcess);
+VARIANT_ENUM_CAST(godot::DragonBonesArmatureView::OccluderCullMode);
