@@ -85,6 +85,7 @@ private:
 	RID occluder_rid;
 	RID occluder_polygon_rid;
 	PackedVector2Array occluder_polygon;
+	bool occluder_attached_to_canvas{ false };
 
 #ifdef DEBUG_ENABLED
 	DebugDraw debug_draw{ this };

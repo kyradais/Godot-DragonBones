@@ -515,8 +515,8 @@ void DragonBonesArmatureView::set_occluder_cull_mode(OccluderCullMode p_cull_mod
 	}
 	occluder_cull_mode = p_cull_mode;
 	const auto RS = RenderingServer::get_singleton();
-	if (RS && occluder_rid.is_valid()) {
-		RS->canvas_light_occluder_set_cull_mode(occluder_rid, (RenderingServer::CanvasLightOccluderCullMode)occluder_cull_mode);
+	if (RS && occluder_polygon_rid.is_valid()) {
+		RS->canvas_occluder_polygon_set_cull_mode(occluder_polygon_rid, (RenderingServer::CanvasOccluderPolygonCullMode)occluder_cull_mode);
 	}
 }
 
@@ -708,22 +708,24 @@ void DragonBonesArmatureView::_notification(int p_what) {
 			set_active(active);
 			const auto RS = RenderingServer::get_singleton();
 			if (RS && !occluder_rid.is_valid()) {
-				occluder_polygon_rid = RS->canvas_light_occluder_polygon_create();
+				occluder_polygon_rid = RS->canvas_occluder_polygon_create();
 				occluder_rid = RS->canvas_light_occluder_create();
 				RS->canvas_light_occluder_set_polygon(occluder_rid, occluder_polygon_rid);
 				RS->canvas_light_occluder_set_enabled(occluder_rid, occluder_enabled);
-				RS->canvas_light_occluder_set_cull_mode(occluder_rid, (RenderingServer::CanvasLightOccluderCullMode)occluder_cull_mode);
+				RS->canvas_occluder_polygon_set_cull_mode(occluder_polygon_rid, (RenderingServer::CanvasOccluderPolygonCullMode)occluder_cull_mode);
 				RS->canvas_light_occluder_set_light_mask(occluder_rid, occluder_light_mask);
 				if (is_inside_tree()) {
-					RS->canvas_light_occluder_attach_to_canvas(occluder_rid, get_canvas_item());
+					RS->canvas_light_occluder_attach_to_canvas(occluder_rid, get_canvas());
+					occluder_attached_to_canvas = true;
 				}
 			}
 		} break;
 		case NOTIFICATION_EXIT_TREE: {
 			const auto RS = RenderingServer::get_singleton();
 			if (RS && occluder_rid.is_valid()) {
-				if (RS->canvas_light_occluder_get_canvas(occluder_rid) == get_canvas_item()) {
-					RS->canvas_light_occluder_detach_from_canvas(occluder_rid);
+				if (occluder_attached_to_canvas) {
+					// detach if needed or just let free handle it
+					occluder_attached_to_canvas = false;
 				}
 				RS->free_rid(occluder_polygon_rid);
 				RS->free_rid(occluder_rid);
@@ -765,8 +767,10 @@ void DragonBonesArmatureView::_draw() {
 
 	const auto RS = RenderingServer::get_singleton();
 
-	// Update occluder polygon from draw data if enabled.
+	// Update occluder transform and polygon from draw data.
 	if (occluder_enabled && occluder_rid.is_valid()) {
+		RS->canvas_light_occluder_set_transform(occluder_rid, get_global_transform());
+
 		occluder_polygon.clear();
 		for (const ArmatureDrawData::Layer &layer : draw_data) {
 			for (const ArmatureDrawData::Data &data : layer.get_data()) {
@@ -776,7 +780,9 @@ void DragonBonesArmatureView::_draw() {
 				}
 			}
 		}
-		RS->canvas_light_occluder_polygon_set(occluder_polygon_rid, occluder_polygon);
+		if (!occluder_polygon.is_empty()) {
+			RS->canvas_occluder_polygon_set_shape(occluder_polygon_rid, occluder_polygon, true);
+		}
 	}
 
 	draw_scratch.rebuild();
@@ -1005,9 +1011,7 @@ DragonBonesArmatureView::~DragonBonesArmatureView() {
 	const auto RS = RenderingServer::get_singleton();
 	if (RS) {
 		if (occluder_rid.is_valid()) {
-			if (RS->canvas_light_occluder_get_canvas(occluder_rid) != RID()) {
-				RS->canvas_light_occluder_detach_from_canvas(occluder_rid);
-			}
+			occluder_attached_to_canvas = false;
 			RS->free_rid(occluder_polygon_rid);
 			RS->free_rid(occluder_rid);
 		}
