@@ -44,6 +44,86 @@
 using namespace godot;
 
 // ----------------
+// Andrew's monotone chain convex hull (no self-intersection, smooth shadow)
+static void compute_convex_hull(PackedVector2Array &p_points, PackedVector2Array &r_hull) {
+	if (p_points.size() < 3) {
+		r_hull = p_points;
+		return;
+	}
+
+	auto cross = [](const Vector2 &O, const Vector2 &A, const Vector2 &B) {
+		return (A.x - O.x) * (B.y - O.y) - (A.y - O.y) * (B.x - O.x);
+	};
+
+	// Copy to std::vector for sorting
+	std::vector<Vector2> pts;
+	pts.reserve(p_points.size());
+	for (int i = 0; i < p_points.size(); ++i) {
+		pts.push_back(p_points[i]);
+	}
+
+	std::sort(pts.begin(), pts.end(), [](const Vector2 &a, const Vector2 &b) {
+		if (a.x != b.x)
+			return a.x < b.x;
+		return a.y < b.y;
+	});
+
+	// Build lower hull
+	std::vector<Vector2> lower;
+	for (const Vector2 &pt : pts) {
+		while (lower.size() >= 2 && cross(lower[lower.size() - 2], lower[lower.size() - 1], pt) <= 0) {
+			lower.pop_back();
+		}
+		lower.push_back(pt);
+	}
+
+	// Build upper hull
+	std::vector<Vector2> upper;
+	for (int i = (int)pts.size() - 1; i >= 0; --i) {
+		const Vector2 &pt = pts[i];
+		while (upper.size() >= 2 && cross(upper[upper.size() - 2], upper[upper.size() - 1], pt) <= 0) {
+			upper.pop_back();
+		}
+		upper.push_back(pt);
+	}
+
+	// Concatenate (drop last of each to avoid duplication)
+	r_hull.clear();
+	r_hull.resize(lower.size() + upper.size() - 2);
+	int idx = 0;
+	for (size_t i = 0; i < lower.size() - 1; ++i) {
+		r_hull[idx++] = lower[i];
+	}
+	for (size_t i = 0; i < upper.size() - 1; ++i) {
+		r_hull[idx++] = upper[i];
+	}
+}
+
+static void expand_polygon(PackedVector2Array &r_poly, float p_offset) {
+	int count = r_poly.size();
+	if (count < 3 || p_offset == 0.0f) {
+		return;
+	}
+
+	// Calculate centroid
+	Vector2 centroid(0, 0);
+	for (int i = 0; i < count; ++i) {
+		centroid += r_poly[i];
+	}
+	centroid /= (float)count;
+
+	// Push vertices outward/inward relative to centroid
+	for (int i = 0; i < count; ++i) {
+		Vector2 dir = (r_poly[i] - centroid);
+		float len = dir.length();
+		if (len > 0.0001f) {
+			dir /= len;
+			r_poly[i] += dir * p_offset;
+		}
+	}
+}
+
+// ----------------
 static HashMap<CanvasItemMaterial::BlendMode, Ref<CanvasItemMaterial>> blend_materials{};
 static RID get_blend_material(CanvasItemMaterial::BlendMode p_blend_mode) {
 	auto it = blend_materials.find(p_blend_mode);
@@ -539,6 +619,30 @@ int DragonBonesArmatureView::get_occluder_light_mask() const {
 	return occluder_light_mask;
 }
 
+void DragonBonesArmatureView::set_occluder_polygon_mode(int p_mode) {
+	if (occluder_polygon_mode == p_mode) {
+		return;
+	}
+	occluder_polygon_mode = p_mode;
+	queue_redraw();
+}
+
+int DragonBonesArmatureView::get_occluder_polygon_mode() const {
+	return occluder_polygon_mode;
+}
+
+void DragonBonesArmatureView::set_occluder_shadow_offset(float p_offset) {
+	if (occluder_shadow_offset == p_offset) {
+		return;
+	}
+	occluder_shadow_offset = p_offset;
+	queue_redraw();
+}
+
+float DragonBonesArmatureView::get_occluder_shadow_offset() const {
+	return occluder_shadow_offset;
+}
+
 void DragonBonesArmatureView::set_time_scale(float p_time_scale) {
 	time_scale = p_time_scale < 0.0 ? 0.0 : p_time_scale;
 }
@@ -771,15 +875,29 @@ void DragonBonesArmatureView::_draw() {
 	if (occluder_enabled && occluder_rid.is_valid()) {
 		RS->canvas_light_occluder_set_transform(occluder_rid, get_global_transform());
 
-		occluder_polygon.clear();
+		PackedVector2Array raw_points;
 		for (const ArmatureDrawData::Layer &layer : draw_data) {
 			for (const ArmatureDrawData::Data &data : layer.get_data()) {
 				const auto v = data.vertices->ptr();
 				for (size_t i = 0; i < data.vertices->size(); ++i) {
-					occluder_polygon.push_back(data.transform.xform(v[i]));
+					raw_points.push_back(data.transform.xform(v[i]));
 				}
 			}
 		}
+
+		if (occluder_polygon_mode == 1) {
+			// Convex Hull
+			compute_convex_hull(raw_points, occluder_polygon);
+		} else {
+			// Raw mesh vertices
+			occluder_polygon = raw_points;
+		}
+
+		// Expand polygon outward to close the gap between occlusion edge and light source.
+		if (occluder_shadow_offset > 0.0f && !occluder_polygon.is_empty()) {
+			expand_polygon(occluder_polygon, occluder_shadow_offset);
+		}
+
 		if (!occluder_polygon.is_empty()) {
 			RS->canvas_occluder_polygon_set_shape(occluder_polygon_rid, occluder_polygon, true);
 		}
@@ -985,11 +1103,17 @@ void DragonBonesArmatureView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_occluder_cull_mode"), &DragonBonesArmatureView::get_occluder_cull_mode);
 	ClassDB::bind_method(D_METHOD("set_occluder_light_mask", "light_mask"), &DragonBonesArmatureView::set_occluder_light_mask);
 	ClassDB::bind_method(D_METHOD("get_occluder_light_mask"), &DragonBonesArmatureView::get_occluder_light_mask);
+	ClassDB::bind_method(D_METHOD("set_occluder_polygon_mode", "polygon_mode"), &DragonBonesArmatureView::set_occluder_polygon_mode);
+	ClassDB::bind_method(D_METHOD("get_occluder_polygon_mode"), &DragonBonesArmatureView::get_occluder_polygon_mode);
+	ClassDB::bind_method(D_METHOD("set_occluder_shadow_offset", "shadow_offset"), &DragonBonesArmatureView::set_occluder_shadow_offset);
+	ClassDB::bind_method(D_METHOD("get_occluder_shadow_offset"), &DragonBonesArmatureView::get_occluder_shadow_offset);
 
 	ADD_GROUP("Light Occluder", "occluder_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "occluder_enabled"), "set_occluder_enabled", "is_occluder_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_cull_mode", PROPERTY_HINT_ENUM, "Disabled,Clockwise,CounterClockwise"), "set_occluder_cull_mode", "get_occluder_cull_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_light_mask", PROPERTY_HINT_RANGE, "0,1023,1"), "set_occluder_light_mask", "get_occluder_light_mask");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_polygon_mode", PROPERTY_HINT_ENUM, "Raw Mesh,Convex Hull"), "set_occluder_polygon_mode", "get_occluder_polygon_mode");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occluder_shadow_offset", PROPERTY_HINT_RANGE, "-64,64,0.5,or_less,or_greater"), "set_occluder_shadow_offset", "get_occluder_shadow_offset");
 
 	//
 	DragonBones::add_clean_static_callback(&clear_static);
