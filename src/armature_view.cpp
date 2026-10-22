@@ -112,13 +112,17 @@ static void expand_polygon(PackedVector2Array &r_poly, float p_offset) {
 	}
 	centroid /= (float)count;
 
-	// Push vertices outward/inward relative to centroid
+	// Push vertices outward/inward along their direction from centroid
 	for (int i = 0; i < count; ++i) {
-		Vector2 dir = (r_poly[i] - centroid);
-		float len = dir.length();
-		if (len > 0.0001f) {
-			dir /= len;
-			r_poly[i] += dir * p_offset;
+		Vector2 dir = r_poly[i] - centroid;
+		float dist = dir.length();
+		if (dist > 0.0001f) {
+			dir /= dist;
+			float steps = dist + p_offset;
+			if (steps < 0.0f) {
+				steps = 0.0f; // never invert past centroid
+			}
+			r_poly[i] = centroid + dir * steps;
 		}
 	}
 }
@@ -894,7 +898,7 @@ void DragonBonesArmatureView::_draw() {
 		}
 
 		// Expand polygon outward to close the gap between occlusion edge and light source.
-		if (occluder_shadow_offset > 0.0f && !occluder_polygon.is_empty()) {
+		if (occluder_shadow_offset != 0.0f && !occluder_polygon.is_empty()) {
 			expand_polygon(occluder_polygon, occluder_shadow_offset);
 		}
 
