@@ -83,7 +83,8 @@ private:
 	OccluderCullMode occluder_cull_mode{ OCCLUDER_CULL_DISABLED };
 	int occluder_light_mask{ 0b001 }; // 1st light layer
 	int occluder_polygon_mode{ 0 }; // 0=Raw Mesh, 1=Convex Hull
-	float occluder_shadow_offset{ 0.0f };
+	float occluder_shadow_offset_x{ 0.0f };
+	float occluder_shadow_offset_y{ 0.0f };
 	RID occluder_rid;
 	RID occluder_polygon_rid;
 	PackedVector2Array occluder_polygon;
@@ -172,8 +173,11 @@ public:
 	void set_occluder_polygon_mode(int p_mode);
 	int get_occluder_polygon_mode() const;
 
-	void set_occluder_shadow_offset(float p_offset);
-	float get_occluder_shadow_offset() const;
+	void set_occluder_shadow_offset_x(float p_offset);
+	float get_occluder_shadow_offset_x() const;
+
+	void set_occluder_shadow_offset_y(float p_offset);
+	float get_occluder_shadow_offset_y() const;
 
 	DragonBonesArmature *get_armature();
 

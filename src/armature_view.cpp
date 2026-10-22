@@ -99,9 +99,9 @@ static void compute_convex_hull(PackedVector2Array &p_points, PackedVector2Array
 	}
 }
 
-static void expand_polygon(PackedVector2Array &r_poly, float p_offset) {
+static void expand_polygon(PackedVector2Array &r_poly, float p_offset_x, float p_offset_y) {
 	int count = r_poly.size();
-	if (count < 3 || p_offset == 0.0f) {
+	if (count < 3 || (p_offset_x == 0.0f && p_offset_y == 0.0f)) {
 		return;
 	}
 
@@ -112,18 +112,32 @@ static void expand_polygon(PackedVector2Array &r_poly, float p_offset) {
 	}
 	centroid /= (float)count;
 
-	// Push vertices outward/inward along their direction from centroid
+	// Push vertices outward/inward along their direction from centroid,
+	// scaling each axis independently so X and Y offsets can differ.
 	for (int i = 0; i < count; ++i) {
 		Vector2 dir = r_poly[i] - centroid;
-		float dist = dir.length();
-		if (dist > 0.0001f) {
-			dir /= dist;
-			float steps = dist + p_offset;
-			if (steps < 0.0f) {
-				steps = 0.0f; // never invert past centroid
-			}
-			r_poly[i] = centroid + dir * steps;
+		Vector2 abs_dir = dir.abs();
+		if (abs_dir.x < 0.0001f && abs_dir.y < 0.0001f) {
+			continue;
 		}
+
+		// Normalize each axis independently to vector length 1 per axis.
+		Vector2 unit = Vector2(
+				abs_dir.x > 0.0001f ? dir.x / abs_dir.x : 0.0f,
+				abs_dir.y > 0.0001f ? dir.y / abs_dir.y : 0.0f);
+
+		float steps_x = dir.x + unit.x * p_offset_x;
+		float steps_y = dir.y + unit.y * p_offset_y;
+
+		// Never invert past centroid.
+		if ((dir.x < 0.0f && steps_x > 0.0f) || (dir.x > 0.0f && steps_x < 0.0f)) {
+			steps_x = 0.0f;
+		}
+		if ((dir.y < 0.0f && steps_y > 0.0f) || (dir.y > 0.0f && steps_y < 0.0f)) {
+			steps_y = 0.0f;
+		}
+
+		r_poly[i] = centroid + Vector2(steps_x, steps_y);
 	}
 }
 
@@ -635,16 +649,28 @@ int DragonBonesArmatureView::get_occluder_polygon_mode() const {
 	return occluder_polygon_mode;
 }
 
-void DragonBonesArmatureView::set_occluder_shadow_offset(float p_offset) {
-	if (occluder_shadow_offset == p_offset) {
+void DragonBonesArmatureView::set_occluder_shadow_offset_x(float p_offset) {
+	if (occluder_shadow_offset_x == p_offset) {
 		return;
 	}
-	occluder_shadow_offset = p_offset;
+	occluder_shadow_offset_x = p_offset;
 	queue_redraw();
 }
 
-float DragonBonesArmatureView::get_occluder_shadow_offset() const {
-	return occluder_shadow_offset;
+float DragonBonesArmatureView::get_occluder_shadow_offset_x() const {
+	return occluder_shadow_offset_x;
+}
+
+void DragonBonesArmatureView::set_occluder_shadow_offset_y(float p_offset) {
+	if (occluder_shadow_offset_y == p_offset) {
+		return;
+	}
+	occluder_shadow_offset_y = p_offset;
+	queue_redraw();
+}
+
+float DragonBonesArmatureView::get_occluder_shadow_offset_y() const {
+	return occluder_shadow_offset_y;
 }
 
 void DragonBonesArmatureView::set_time_scale(float p_time_scale) {
@@ -898,8 +924,8 @@ void DragonBonesArmatureView::_draw() {
 		}
 
 		// Expand polygon outward to close the gap between occlusion edge and light source.
-		if (occluder_shadow_offset != 0.0f && !occluder_polygon.is_empty()) {
-			expand_polygon(occluder_polygon, occluder_shadow_offset);
+		if ((occluder_shadow_offset_x != 0.0f || occluder_shadow_offset_y != 0.0f) && !occluder_polygon.is_empty()) {
+			expand_polygon(occluder_polygon, occluder_shadow_offset_x, occluder_shadow_offset_y);
 		}
 
 		if (!occluder_polygon.is_empty()) {
@@ -1109,15 +1135,18 @@ void DragonBonesArmatureView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_occluder_light_mask"), &DragonBonesArmatureView::get_occluder_light_mask);
 	ClassDB::bind_method(D_METHOD("set_occluder_polygon_mode", "polygon_mode"), &DragonBonesArmatureView::set_occluder_polygon_mode);
 	ClassDB::bind_method(D_METHOD("get_occluder_polygon_mode"), &DragonBonesArmatureView::get_occluder_polygon_mode);
-	ClassDB::bind_method(D_METHOD("set_occluder_shadow_offset", "shadow_offset"), &DragonBonesArmatureView::set_occluder_shadow_offset);
-	ClassDB::bind_method(D_METHOD("get_occluder_shadow_offset"), &DragonBonesArmatureView::get_occluder_shadow_offset);
+	ClassDB::bind_method(D_METHOD("set_occluder_shadow_offset_x", "shadow_offset_x"), &DragonBonesArmatureView::set_occluder_shadow_offset_x);
+	ClassDB::bind_method(D_METHOD("get_occluder_shadow_offset_x"), &DragonBonesArmatureView::get_occluder_shadow_offset_x);
+	ClassDB::bind_method(D_METHOD("set_occluder_shadow_offset_y", "shadow_offset_y"), &DragonBonesArmatureView::set_occluder_shadow_offset_y);
+	ClassDB::bind_method(D_METHOD("get_occluder_shadow_offset_y"), &DragonBonesArmatureView::get_occluder_shadow_offset_y);
 
 	ADD_GROUP("Light Occluder", "occluder_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "occluder_enabled"), "set_occluder_enabled", "is_occluder_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_cull_mode", PROPERTY_HINT_ENUM, "Disabled,Clockwise,CounterClockwise"), "set_occluder_cull_mode", "get_occluder_cull_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_light_mask", PROPERTY_HINT_RANGE, "0,1023,1"), "set_occluder_light_mask", "get_occluder_light_mask");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_polygon_mode", PROPERTY_HINT_ENUM, "Raw Mesh,Convex Hull"), "set_occluder_polygon_mode", "get_occluder_polygon_mode");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occluder_shadow_offset", PROPERTY_HINT_RANGE, "-64,64,0.5,or_less,or_greater"), "set_occluder_shadow_offset", "get_occluder_shadow_offset");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occluder_shadow_offset_x", PROPERTY_HINT_RANGE, "-64,64,0.5,or_less,or_greater"), "set_occluder_shadow_offset_x", "get_occluder_shadow_offset_x");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occluder_shadow_offset_y", PROPERTY_HINT_RANGE, "-64,64,0.5,or_less,or_greater"), "set_occluder_shadow_offset_y", "get_occluder_shadow_offset_y");
 
 	//
 	DragonBones::add_clean_static_callback(&clear_static);
