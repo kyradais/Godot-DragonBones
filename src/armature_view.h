@@ -62,6 +62,12 @@ public:
 		OCCLUDER_CULL_COUNTERCLOCKWISE = 2,
 	};
 
+	/** Shadow mode for the light occluder. */
+	enum OccluderShadowMode {
+		OCCLUDER_SHADOW_DEFAULT = 0,
+		OCCLUDER_SHADOW_FULL_BRIGHT = 1,
+	};
+
 	using AnimFadeOutMode = DragonBonesArmature::AnimFadeOutMode;
 
 private:
@@ -85,6 +91,9 @@ private:
 	int occluder_polygon_mode{ 0 }; // 0=Raw Mesh, 1=Convex Hull
 	float occluder_shadow_offset_x{ 0.0f };
 	float occluder_shadow_offset_y{ 0.0f };
+	OccluderShadowMode occluder_shadow_mode{ OCCLUDER_SHADOW_DEFAULT };
+	int saved_light_mask{ 1 };
+	bool light_mask_saved{ false };
 	RID occluder_rid;
 	RID occluder_polygon_rid;
 	PackedVector2Array occluder_polygon;
@@ -179,6 +188,9 @@ public:
 	void set_occluder_shadow_offset_y(float p_offset);
 	float get_occluder_shadow_offset_y() const;
 
+	void set_occluder_shadow_mode(OccluderShadowMode p_mode);
+	OccluderShadowMode get_occluder_shadow_mode() const;
+
 	DragonBonesArmature *get_armature();
 
 public:
@@ -244,6 +256,8 @@ private:
 	bool is_armature_valid() const { return armature != nullptr && armature->is_valid(); }
 	RID get_draw_mesh(int p_index);
 
+	void apply_occluder_shadow_layering();
+
 	void reset();
 	void rebuild_armature();
 
@@ -259,3 +273,4 @@ private:
 
 VARIANT_ENUM_CAST(godot::DragonBonesArmatureView::AnimationCallbackModeProcess);
 VARIANT_ENUM_CAST(godot::DragonBonesArmatureView::OccluderCullMode);
+VARIANT_ENUM_CAST(godot::DragonBonesArmatureView::OccluderShadowMode);

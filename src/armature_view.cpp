@@ -142,14 +142,34 @@ static void expand_polygon(PackedVector2Array &r_poly, float p_offset_x, float p
 }
 
 // ----------------
-static HashMap<CanvasItemMaterial::BlendMode, Ref<CanvasItemMaterial>> blend_materials{};
-static RID get_blend_material(CanvasItemMaterial::BlendMode p_blend_mode) {
-	auto it = blend_materials.find(p_blend_mode);
+struct MaterialKey {
+	CanvasItemMaterial::BlendMode blend_mode;
+	bool unshaded;
+
+	bool operator==(const MaterialKey &p_other) const {
+		return blend_mode == p_other.blend_mode && unshaded == p_other.unshaded;
+	}
+};
+
+struct MaterialKeyHasher {
+	static uint32_t hash(const MaterialKey &p_key) {
+		uint32_t h = hash_murmur3_one_32(p_key.blend_mode);
+		return hash_fmix32(h ^ (p_key.unshaded ? 1 : 0));
+	}
+};
+
+static HashMap<MaterialKey, Ref<CanvasItemMaterial>, MaterialKeyHasher> blend_materials{};
+static RID get_blend_material(CanvasItemMaterial::BlendMode p_blend_mode, bool p_unshaded) {
+	MaterialKey key{ p_blend_mode, p_unshaded };
+	auto it = blend_materials.find(key);
 	if (it == blend_materials.end()) {
 		Ref<CanvasItemMaterial> mat;
 		mat.instantiate();
 		mat->set_blend_mode(p_blend_mode);
-		return blend_materials.insert(p_blend_mode, mat)->value->get_rid();
+		if (p_unshaded) {
+			mat->set_light_mode(CanvasItemMaterial::LIGHT_MODE_UNSHADED);
+		}
+		return blend_materials.insert(key, mat)->value->get_rid();
 	}
 	return it->value->get_rid();
 }
@@ -600,6 +620,7 @@ void DragonBonesArmatureView::set_occluder_enabled(bool p_enabled) {
 	if (RS && occluder_rid.is_valid()) {
 		RS->canvas_light_occluder_set_enabled(occluder_rid, occluder_enabled);
 	}
+	apply_occluder_shadow_layering();
 	queue_redraw();
 }
 
@@ -671,6 +692,62 @@ void DragonBonesArmatureView::set_occluder_shadow_offset_y(float p_offset) {
 
 float DragonBonesArmatureView::get_occluder_shadow_offset_y() const {
 	return occluder_shadow_offset_y;
+}
+
+void DragonBonesArmatureView::set_occluder_shadow_mode(OccluderShadowMode p_mode) {
+	if (occluder_shadow_mode == p_mode) {
+		return;
+	}
+	occluder_shadow_mode = p_mode;
+	apply_occluder_shadow_layering();
+	queue_redraw();
+}
+
+DragonBonesArmatureView::OccluderShadowMode DragonBonesArmatureView::get_occluder_shadow_mode() const {
+	return occluder_shadow_mode;
+}
+
+void DragonBonesArmatureView::apply_occluder_shadow_layering() {
+	// OccluderShadowMode:
+	//   DEFAULT       (0) - character receives light/shadow normally from scene lights.
+	//   FULL_BRIGHT   (1) - character is fully lit (unshaded), occluder shadow only falls
+	//                       on background; character never receives occluder shadow.
+	if (!occluder_enabled) {
+		if (light_mask_saved) {
+			CanvasItem::set_light_mask(saved_light_mask);
+			light_mask_saved = false;
+		}
+		// Restore modulate for FULL_BRIGHT mode.
+		if (get_modulate() == Color(1, 1, 1, 1)) {
+			set_modulate(CanvasItem::get_modulate());
+		}
+		return;
+	}
+
+	switch (occluder_shadow_mode) {
+		case OCCLUDER_SHADOW_FULL_BRIGHT: {
+			// Character ignores all scene lights → no occluder shadow on it.
+			// unshaded=true in draw loop: material skips light computation → flat texture colors.
+			if (!light_mask_saved) {
+				saved_light_mask = CanvasItem::get_light_mask();
+				light_mask_saved = true;
+			}
+			CanvasItem::set_light_mask(0);
+			if (get_modulate() != Color(1, 1, 1, 1)) {
+				set_modulate(Color(1, 1, 1, 1));
+			}
+		} break;
+		default: // OCCLUDER_SHADOW_DEFAULT
+		{
+			if (light_mask_saved) {
+				CanvasItem::set_light_mask(saved_light_mask);
+				light_mask_saved = false;
+			}
+			if (get_modulate() != Color(1, 1, 1, 1)) {
+				set_modulate(Color(1, 1, 1, 1));
+			}
+		} break;
+	}
 }
 
 void DragonBonesArmatureView::set_time_scale(float p_time_scale) {
@@ -852,6 +929,9 @@ void DragonBonesArmatureView::_notification(int p_what) {
 					RS->canvas_light_occluder_attach_to_canvas(occluder_rid, get_canvas());
 					occluder_attached_to_canvas = true;
 				}
+				// Properties are already set at this point, apply the layering
+				// so the effective light_mask matches the current mode.
+				apply_occluder_shadow_layering();
 			}
 		} break;
 		case NOTIFICATION_EXIT_TREE: {
@@ -941,6 +1021,9 @@ void DragonBonesArmatureView::_draw() {
 	}
 
 	// Add rendering commands.
+	// unshaded=true for BEHIND and FULL_BRIGHT: character renders flat (no shadow on it),
+	// shadow still visible on background (background items keep their light_mask).
+	const bool unshaded = occluder_enabled && (occluder_shadow_mode == OCCLUDER_SHADOW_FULL_BRIGHT);
 	constexpr Transform2D identity{};
 	for (uint32_t mesh_i = 0; mesh_i < draw_scratch.get_mesh_count(); ++mesh_i) {
 		const RID mesh = get_draw_mesh(mesh_i);
@@ -957,7 +1040,7 @@ void DragonBonesArmatureView::_draw() {
 			arr[RenderingServer::ARRAY_TEX_UV] = surface_data.get_vertices_uv();
 
 			RS->mesh_add_surface_from_arrays(mesh, RenderingServer::PRIMITIVE_TRIANGLES, arr);
-			auto mat = get_blend_material(surface_data.blend_mode);
+			auto mat = get_blend_material(surface_data.blend_mode, unshaded);
 			RS->mesh_surface_set_material(mesh, RS->mesh_get_surface_count(mesh) - 1, mat);
 		}
 
@@ -1126,6 +1209,9 @@ void DragonBonesArmatureView::_bind_methods() {
 	BIND_ENUM_CONSTANT(OCCLUDER_CULL_CLOCKWISE);
 	BIND_ENUM_CONSTANT(OCCLUDER_CULL_COUNTERCLOCKWISE);
 
+	BIND_ENUM_CONSTANT(OCCLUDER_SHADOW_DEFAULT);
+	BIND_ENUM_CONSTANT(OCCLUDER_SHADOW_FULL_BRIGHT);
+
 	// Light occlusion
 	ClassDB::bind_method(D_METHOD("set_occluder_enabled", "enabled"), &DragonBonesArmatureView::set_occluder_enabled);
 	ClassDB::bind_method(D_METHOD("is_occluder_enabled"), &DragonBonesArmatureView::is_occluder_enabled);
@@ -1139,6 +1225,8 @@ void DragonBonesArmatureView::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_occluder_shadow_offset_x"), &DragonBonesArmatureView::get_occluder_shadow_offset_x);
 	ClassDB::bind_method(D_METHOD("set_occluder_shadow_offset_y", "shadow_offset_y"), &DragonBonesArmatureView::set_occluder_shadow_offset_y);
 	ClassDB::bind_method(D_METHOD("get_occluder_shadow_offset_y"), &DragonBonesArmatureView::get_occluder_shadow_offset_y);
+	ClassDB::bind_method(D_METHOD("set_occluder_shadow_mode", "shadow_mode"), &DragonBonesArmatureView::set_occluder_shadow_mode);
+	ClassDB::bind_method(D_METHOD("get_occluder_shadow_mode"), &DragonBonesArmatureView::get_occluder_shadow_mode);
 
 	ADD_GROUP("Light Occluder", "occluder_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "occluder_enabled"), "set_occluder_enabled", "is_occluder_enabled");
@@ -1147,6 +1235,7 @@ void DragonBonesArmatureView::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_polygon_mode", PROPERTY_HINT_ENUM, "Raw Mesh,Convex Hull"), "set_occluder_polygon_mode", "get_occluder_polygon_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occluder_shadow_offset_x", PROPERTY_HINT_RANGE, "-64,64,0.5,or_less,or_greater"), "set_occluder_shadow_offset_x", "get_occluder_shadow_offset_x");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occluder_shadow_offset_y", PROPERTY_HINT_RANGE, "-64,64,0.5,or_less,or_greater"), "set_occluder_shadow_offset_y", "get_occluder_shadow_offset_y");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "occluder_shadow_mode", PROPERTY_HINT_ENUM, "Default,Full Bright"), "set_occluder_shadow_mode", "get_occluder_shadow_mode");
 
 	//
 	DragonBones::add_clean_static_callback(&clear_static);
